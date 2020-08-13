@@ -4,15 +4,15 @@ import { Amqp } from '@spectacles/brokers';
 import { AmqpResponseOptions } from '@spectacles/brokers/typings/src/Amqp';
 import { on } from 'events';
 import postgres from 'postgres';
-import { outputFromJSON, ParserOutput } from 'lexure';
+import { Lexer, Parser, prefixedStrategy, Args } from 'lexure';
 import { resolve } from 'path';
 import readdirp from 'readdirp';
 import Rest from '@yuudachi/rest';
 import { container } from 'tsyringe';
 
 import Command, { commandInfo } from '../src/Command';
-import { BrokerParserOutput } from '../src/types/broker';
 import { kSQL } from '../src/tokens';
+import { Message } from '@spectacles/types';
 
 const token = process.env.DISCORD_TOKEN;
 if (!token) throw new Error('missing discord token');
@@ -47,14 +47,27 @@ void (async () => {
 		command.aliases?.forEach((alias) => commands.set(alias, command));
 	}
 
-	for await (const [message, { ack }] of on(broker, 'COMMAND') as AsyncIterableIterator<
-		[BrokerParserOutput, AmqpResponseOptions]
-	>) {
+	type MessageCreates = AsyncIterable<[Message, AmqpResponseOptions]>;
+	for await (const [message, { ack }] of on(broker, 'MESSAGE_CREATE') as MessageCreates) {
 		ack();
-		const command = commands.get(message.command.value);
+		const [data] = (await pg`select prefix
+		from guild_settings
+		where guild_id = ${message.guild_id ?? null};`) as [{ prefix: string | null }];
+		// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+		const prefix = data?.prefix ?? '?';
+		const lexer = new Lexer(message.content).setQuotes([
+			['"', '"'],
+			['“', '”'],
+		]);
+
+		const res = lexer.lexCommand((s) => (s.startsWith(prefix) ? prefix.length : null));
+		if (!res) continue;
+
+		const command = commands.get(res[0].value);
 		if (!command) continue;
 
-		const res: ParserOutput = outputFromJSON(message.arguments);
-		command.execute(message.message, res);
+		const parser = new Parser(res[1]()).setUnorderedStrategy(prefixedStrategy(['--', '-'], ['=', ':']));
+		const args = new Args(parser.parse());
+		command.execute(message, args);
 	}
 })();
