@@ -33,7 +33,7 @@ const files = readdirp(resolve(__dirname, '..', 'src', 'commands'), {
 
 void (async () => {
 	const conn = await broker.connect('rabbitmq');
-	await broker.subscribe(['COMMAND']);
+	await broker.subscribe(['MESSAGE_CREATE']);
 
 	await restBroker.connect(conn);
 
